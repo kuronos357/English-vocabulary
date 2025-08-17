@@ -6,8 +6,8 @@ def load_config():
     """設定ファイルを読み込み、APIキーとデータベースIDを返す"""
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(script_dir, '..', 'ログ・設定', 'config.json')
-        
+        config_path = os.path.join(script_dir, '参照データ', 'config.json')
+
         print(f"設定ファイルを読み込みます: {config_path}")
         
         with open(config_path, 'r', encoding='utf-8') as f:
