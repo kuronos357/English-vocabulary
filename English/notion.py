@@ -4,7 +4,7 @@ import pandas as pd
 import json
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # --- Helper Functions ---
 
@@ -20,6 +20,8 @@ def get_text_from_property(prop):
         return prop['date'].get('start', '')
     if prop_type == 'select' and prop['select']:
         return prop['select'].get('name', '')
+    if prop_type == 'multi_select' and prop['multi_select']:
+        return ", ".join([item.get('name', '') for item in prop['multi_select']])
     return ""
 
 def get_number_from_property(prop):
@@ -48,12 +50,13 @@ class WordQuizApp:
             'Content-Type': 'application/json',
         }
 
-        # Initialize stats trackers
+        # Initialize stats trackers (will be loaded from Notion)
         self.todays_total_answered = 0
         self.todays_correct_count = 0
 
         self.df = pd.DataFrame()
         self.load_data_from_notion()
+        self._load_todays_stats_from_notion()
         
         self.current_index = 0
         self.is_answer_visible = False
@@ -101,6 +104,7 @@ class WordQuizApp:
                 '品詞': get_text_from_property(props.get('品詞')),
                 '最終更新日時': page.get('last_edited_time') # Accessing top-level property
             }
+            
             for i in range(1, 5):
                 word_data[f'例文英語{i}'] = get_text_from_property(props.get(f'例文英語{i}'))
                 word_data[f'例文日本語{i}'] = get_text_from_property(props.get(f'例文日本語{i}'))
@@ -260,6 +264,31 @@ class WordQuizApp:
             f"誤答あり: {incorrect} ({incorrect_rate:.1f}%)"
         )
         self.overall_stats_content.config(text=stats_text)
+
+    def _load_todays_stats_from_notion(self):
+        if self.df.empty:
+            self.todays_total_answered = 0
+            self.todays_correct_count = 0
+            return
+
+        # Get today's date in JST
+        now_utc = datetime.now(timezone.utc)
+        now_jst = now_utc + timedelta(hours=9)
+        today_jst = now_jst.date()
+
+        # Convert '最終更新日時' (UTC from Notion) to JST date
+        self.df['最終更新日時_dt_utc'] = pd.to_datetime(self.df['最終更新日時'], errors='coerce', utc=True)
+        self.df['最終更新日時_dt_jst'] = self.df['最終更新日時_dt_utc'] + pd.Timedelta(hours=9)
+        self.df['最終更新日時_date_jst'] = self.df['最終更新日時_dt_jst'].dt.date
+        
+        # Filter for entries updated today in JST
+        todays_entries = self.df[self.df['最終更新日時_date_jst'] == today_jst]
+        
+        self.todays_total_answered = len(todays_entries)
+        self.todays_correct_count = len(todays_entries[todays_entries['正誤'] == '正'])
+        
+        # Drop the temporary columns
+        self.df = self.df.drop(columns=['最終更新日時_dt_utc', '最終更新日時_dt_jst', '最終更新日時_date_jst'])
 
     def show_word(self):
         if self.df.empty or not (0 <= self.current_index < len(self.df)):
