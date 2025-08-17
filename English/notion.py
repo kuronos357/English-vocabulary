@@ -69,6 +69,7 @@ class WordQuizApp:
                 config = json.load(f)
             self.api_key = config.get("NOTION_API_KEY")
             self.database_id = config.get("DATABASE_ID")
+            self.question_mode = config.get("QUESTION_MODE", "未")
             if not self.api_key or not self.database_id:
                 messagebox.showerror("設定エラー", "config.jsonにNOTION_API_KEYとDATABASE_IDを設定してください。")
                 return False
@@ -109,6 +110,18 @@ class WordQuizApp:
         if self.df.empty:
             messagebox.showinfo("情報", "Notionデータベースに単語が見つかりませんでした。")
         else:
+            # Apply question mode sorting
+            if self.question_mode == "未":
+                # Prioritize '未' or empty '正誤'
+                unanswered_df = self.df[self.df['正誤'].isin(['', '未'])]
+                answered_df = self.df[~self.df['正誤'].isin(['', '未'])]
+                self.df = pd.concat([unanswered_df, answered_df]).reset_index(drop=True)
+            elif self.question_mode == "誤":
+                # Prioritize '誤'
+                incorrect_df = self.df[self.df['正誤'] == '誤']
+                other_df = self.df[self.df['正誤'] != '誤']
+                self.df = pd.concat([incorrect_df, other_df]).reset_index(drop=True)
+            
             self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
             self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
 
