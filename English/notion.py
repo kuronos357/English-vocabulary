@@ -119,15 +119,15 @@ class WordQuizApp:
         top_frame = tk.Frame(main_frame)
         top_frame.pack(fill=tk.BOTH, expand=True)
 
-        word_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
-        word_frame.pack(fill=tk.X, pady=5)
-        self.create_label(word_frame, "単語", font_size=16)
-        self.word_content = self.create_content(word_frame, "", font_size=24)
+        self.word_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
+        self.word_frame.pack(fill=tk.X, pady=5)
+        self.create_label(self.word_frame, "単語", font_size=16)
+        self.word_content = self.create_content(self.word_frame, "", font_size=24)
 
-        sentence_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
-        sentence_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        self.create_label(sentence_frame, "例文", font_size=16)
-        self.sentence_labels = [self.create_content(sentence_frame, "", font_size=12) for _ in range(4)]
+        self.sentence_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
+        self.sentence_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.create_label(self.sentence_frame, "例文", font_size=16)
+        self.sentence_labels = [self.create_content(self.sentence_frame, "", font_size=12) for _ in range(4)]
 
         bottom_frame = tk.Frame(main_frame)
         bottom_frame.pack(fill=tk.X, pady=10)
@@ -165,13 +165,28 @@ class WordQuizApp:
         self.incorrect_button = tk.Button(button_frame, text="不正解", command=lambda: self.record_and_next(correct=False), height=2, bg="lightcoral")
         self.incorrect_button.pack(fill=tk.X, padx=10, pady=5)
 
+    def on_resize(self, event=None):
+        try:
+            # Adjust wraplength based on the widget's actual width
+            word_wrap_length = self.word_frame.winfo_width() - 20  # Subtract padding
+            if word_wrap_length > 1:
+                self.word_content.config(wraplength=word_wrap_length)
+
+            sentence_wrap_length = self.sentence_frame.winfo_width() - 20  # Subtract padding
+            if sentence_wrap_length > 1:
+                for label in self.sentence_labels:
+                    label.config(wraplength=sentence_wrap_length)
+        except (AttributeError, tk.TclError):
+            # This can happen if widgets are not yet created or are destroyed.
+            pass
+
     def create_label(self, parent, text, font_size=14):
         label = tk.Label(parent, text=text, font=("Arial", font_size, "bold"))
         label.pack(pady=(5, 0))
         return label
 
     def create_content(self, parent, text, font_size=12, justify="center"):
-        content = tk.Label(parent, text=text, font=("Arial", font_size), wraplength=350, justify=justify)
+        content = tk.Label(parent, text=text, font=("Arial", font_size), justify=justify)
         content.pack(pady=5, padx=10, fill=tk.X)
         return content
 
