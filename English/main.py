@@ -7,7 +7,7 @@ class WordQuizApp:
     def __init__(self, master):
         self.master = master
         self.master.title("英単語学習アプリ")
-        self.master.geometry("900x700")
+        self.master.geometry("900x900")
 
         self.file_path = '/home/kuronos357/programming/Project/Question-generator/English/参照データ/英単語mk3.csv'
         self.load_data()
