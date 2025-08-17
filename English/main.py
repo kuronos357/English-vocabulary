@@ -23,6 +23,12 @@ class WordQuizApp:
             self.df = pd.read_csv(self.file_path)
             # 'Unnamed:' で始まる不要な列を削除
             self.df = self.df.loc[:, ~self.df.columns.str.contains('^Unnamed')]
+            
+            # 例文の数を動的に取得
+            self.sentence_english_cols = sorted([col for col in self.df.columns if col.startswith('例文英語')])
+            self.sentence_japanese_cols = sorted([col for col in self.df.columns if col.startswith('例文日本語')])
+            self.num_sentences = len(self.sentence_english_cols)
+
             self.df['last_learned_date'] = pd.to_datetime(self.df['last_learned_date'], errors='coerce')
             self.df = self.df.sort_values(by='last_learned_date', ascending=True, na_position='first').reset_index(drop=True)
         except FileNotFoundError:
@@ -46,7 +52,7 @@ class WordQuizApp:
         sentence_frame = tk.Frame(main_frame, relief=tk.RIDGE, borderwidth=2)
         sentence_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         self.create_label(sentence_frame, "例文", font_size=16)
-        self.sentence_labels = [self.create_content(sentence_frame, "", font_size=12) for _ in range(4)]
+        self.sentence_labels = [self.create_content(sentence_frame, "", font_size=12) for _ in range(self.num_sentences)]
 
         bottom_frame = tk.Frame(main_frame)
         bottom_frame.pack(fill=tk.X, pady=5)
@@ -93,8 +99,8 @@ class WordQuizApp:
         self.is_answer_visible = False
 
         self.word_content.config(text=word_data.get('英語', ''))
-        for i in range(4):
-            self.sentence_labels[i].config(text=word_data.get(f'例文英語{i+1}', ''))
+        for i, col_name in enumerate(self.sentence_english_cols):
+            self.sentence_labels[i].config(text=word_data.get(col_name, ''))
         self.toggle_button.config(text="回答を表示")
 
         date_str = word_data['last_learned_date'].strftime('%Y-%m-%d %H:%M') if pd.notna(word_data['last_learned_date']) else '未学習'
@@ -114,14 +120,14 @@ class WordQuizApp:
         word_data = self.df.iloc[self.current_index]
         if self.is_answer_visible:
             self.word_content.config(text=word_data.get('英語', ''))
-            for i in range(4):
-                self.sentence_labels[i].config(text=word_data.get(f'例文英語{i+1}', ''))
+            for i, col_name in enumerate(self.sentence_english_cols):
+                self.sentence_labels[i].config(text=word_data.get(col_name, ''))
             self.toggle_button.config(text="回答を表示")
             self.is_answer_visible = False
         else:
             self.word_content.config(text=word_data.get('日本語', ''))
-            for i in range(4):
-                self.sentence_labels[i].config(text=word_data.get(f'例文日本語{i+1}', ''))
+            for i, col_name in enumerate(self.sentence_japanese_cols):
+                self.sentence_labels[i].config(text=word_data.get(col_name, ''))
             self.toggle_button.config(text="問題を表示")
             self.is_answer_visible = True
 
