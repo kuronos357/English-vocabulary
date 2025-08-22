@@ -99,10 +99,11 @@ class WordQuizApp:
                 'page_id': page.get('id'),
                 '英語': get_text_from_property(props.get('英単語')),
                 '日本語': get_text_from_property(props.get('日本語')),
+                'メモ': get_text_from_property(props.get('メモ')),
                 'mistake_count': get_number_from_property(props.get('間違えた回数')),
                 '正誤': get_status_from_property(props.get('正誤')),
                 '品詞': get_text_from_property(props.get('品詞')),
-                '最終更新日時': page.get('last_edited_time') # Accessing top-level property
+                'やった日': get_text_from_property(props.get('やった日'))
             }
             
             for i in range(1, 5):
@@ -146,6 +147,12 @@ class WordQuizApp:
         self.create_label(self.sentence_frame, "例文", font_size=16)
         self.sentence_labels = [self.create_content(self.sentence_frame, "", font_size=12) for _ in range(4)]
 
+        self.memo_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
+        self.memo_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.create_label(self.memo_frame, "メモ", font_size=16)
+        self.memo_content = tk.Text(self.memo_frame, font=("Arial", 12), height=4, wrap=tk.WORD)
+        self.memo_content.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
+
         bottom_frame = tk.Frame(main_frame)
         bottom_frame.pack(fill=tk.X, pady=10)
         bottom_frame.grid_columnconfigure(0, weight=3)
@@ -181,6 +188,34 @@ class WordQuizApp:
         
         self.incorrect_button = tk.Button(button_frame, text="不正解", command=lambda: self.record_and_next(correct=False), height=2, bg="lightcoral")
         self.incorrect_button.pack(fill=tk.X, padx=10, pady=5)
+
+        self.save_memo_button = tk.Button(button_frame, text="メモを保存", command=self.save_memo, height=2)
+        self.save_memo_button.pack(fill=tk.X, padx=10, pady=5)
+
+    def save_memo(self):
+        if self.df.empty or not (0 <= self.current_index < len(self.df)):
+            return
+
+        word_data = self.df.iloc[self.current_index]
+        page_id = word_data['page_id']
+        memo_text = self.memo_content.get("1.0", tk.END).strip()
+
+        properties_to_update = {
+            'メモ': {
+                'rich_text': [
+                    {
+                        'text': {
+                            'content': memo_text
+                        }
+                    }
+                ]
+            }
+        }
+
+        if self.update_notion_page(page_id, properties_to_update):
+            # Update local dataframe
+            self.df.loc[self.current_index, 'メモ'] = memo_text
+            messagebox.showinfo("成功", "メモを保存しました。")
 
     def on_resize(self, event=None):
         try:
@@ -219,7 +254,7 @@ class WordQuizApp:
         word_data = self.df.iloc[self.current_index]
         
         # Safely get and format date
-        date_str = word_data.get('最終更新日時')
+        date_str = word_data.get('やった日')
         if date_str and isinstance(date_str, str):
             try:
                 date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
@@ -230,9 +265,9 @@ class WordQuizApp:
             date_str_formatted = 'N/A'
         
         stats_text = (
-            f"品詞: {word_data.get('品詞') or 'N/A'}\n"
-            f"正誤ステータス: {word_data.get('正誤') or 'N/A'}\n"
-            f"最終更新日時: {date_str_formatted}"
+            f"品詞: {word_data.get('品詞') or 'N/A'}"
+            f"正誤ステータス: {word_data.get('正誤') or 'N/A'}"
+            f"やった日: {date_str_formatted}"
         )
         self.per_question_stats_content.config(text=stats_text)
 
@@ -276,19 +311,22 @@ class WordQuizApp:
         now_jst = now_utc + timedelta(hours=9)
         today_jst = now_jst.date()
 
-        # Convert '最終更新日時' (UTC from Notion) to JST date
-        self.df['最終更新日時_dt_utc'] = pd.to_datetime(self.df['最終更新日時'], errors='coerce', utc=True)
-        self.df['最終更新日時_dt_jst'] = self.df['最終更新日時_dt_utc'] + pd.Timedelta(hours=9)
-        self.df['最終更新日時_date_jst'] = self.df['最終更新日時_dt_jst'].dt.date
+        # Convert 'やった日' (UTC from Notion) to JST date
+        self.df['やった日_dt_utc'] = pd.to_datetime(self.df['やった日'], errors='coerce', utc=True)
+        self.df['やった日_dt_jst'] = self.df['やった日_dt_utc'] + pd.Timedelta(hours=9)
+        self.df['やった日_date_jst'] = self.df['やった日_dt_jst'].dt.date
         
-        # Filter for entries updated today in JST
-        todays_entries = self.df[self.df['最終更新日時_date_jst'] == today_jst]
+        # Filter for entries updated today in JST that have been answered
+        todays_entries = self.df[
+            (self.df['やった日_date_jst'] == today_jst) &
+            (self.df['正誤'].isin(['正', '誤']))
+        ]
         
         self.todays_total_answered = len(todays_entries)
         self.todays_correct_count = len(todays_entries[todays_entries['正誤'] == '正'])
         
         # Drop the temporary columns
-        self.df = self.df.drop(columns=['最終更新日時_dt_utc', '最終更新日時_dt_jst', '最終更新日時_date_jst'])
+        self.df = self.df.drop(columns=['やった日_dt_utc', 'やった日_dt_jst', 'やった日_date_jst'])
 
     def show_word(self):
         if self.df.empty or not (0 <= self.current_index < len(self.df)):
@@ -300,6 +338,8 @@ class WordQuizApp:
         word_data = self.df.iloc[self.current_index]
         self.is_answer_visible = False
         self.word_content.config(text=word_data.get('英語', ''))
+        self.memo_content.delete("1.0", tk.END)
+        self.memo_content.insert("1.0", word_data.get('メモ', ''))
         for i, col_name in enumerate(self.sentence_english_cols):
             self.sentence_labels[i].config(text=word_data.get(col_name, ''))
         self.toggle_button.config(text="回答を表示")
@@ -346,11 +386,15 @@ class WordQuizApp:
             self.df.loc[self.current_index, '正誤'] = new_status
 
         properties_to_update['正誤'] = {'status': {'name': new_status}}
+        current_time_iso = datetime.now(timezone.utc).isoformat()
+        properties_to_update['やった日'] = {'date': {'start': current_time_iso}}
         
         if not self.update_notion_page(page_id, properties_to_update):
             self.todays_total_answered -= 1
             if correct: self.todays_correct_count -= 1
             return
+        
+        self.df.loc[self.df['page_id'] == page_id, 'やった日'] = current_time_iso
         
         self.update_today_stats_display()
         self.update_overall_stats_display()
@@ -369,8 +413,6 @@ class WordQuizApp:
         try:
             response = requests.patch(url, headers=self.headers, json=payload)
             response.raise_for_status()
-            # Update last edited time in dataframe after successful patch
-            self.df.loc[self.df['page_id'] == page_id, '最終更新日時'] = datetime.now().isoformat()
             return True
         except requests.exceptions.RequestException as e:
             messagebox.showerror("更新エラー", f"Notionページの更新に失敗しました.\n{e}")
