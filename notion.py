@@ -71,7 +71,7 @@ class WordQuizApp:
         """
         self.master = master
         self.master.title("英単語学習アプリ (Notion版)")
-        self.master.geometry("900x1000")
+        self.master.geometry("900x1200")# ウィンドウサイズ
 
         # --- 設定とAPI準備 ---
         self.api_key = None
@@ -438,7 +438,7 @@ class WordQuizApp:
         stats_text = (
             f"品詞: {word_data.get('品詞') or 'N/A'}\n"
             f"正誤ステータス: {word_data.get('正誤') or 'N/A'}\n"
-            f"間違えた回数: {word_data.get('mistake_count') or 0}\n"
+            f"間違えた回数: {int(word_data.get('mistake_count')) or 0}\n"
             f"やった日: {date_str_formatted}"
         )
         self.per_question_stats_content.config(text=stats_text)
@@ -470,7 +470,8 @@ class WordQuizApp:
         stats_text = (
             f"総単語数: {total}\n"
             f"正解済み: {correct} ({correct_rate:.1f}%)\n"
-            f"誤答あり: {incorrect} ({incorrect_rate:.1f}%)"
+            f"誤答あり: {incorrect} ({incorrect_rate:.1f}%)\n"
+            f"未回答: {total - (correct + incorrect)}（{100 - (correct_rate + incorrect_rate):.1f}%）"
         )
         self.overall_stats_content.config(text=stats_text)
 
