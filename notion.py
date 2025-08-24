@@ -36,7 +36,7 @@ class WordQuizApp:
     def __init__(self, master):
         self.master = master
         self.master.title("英単語学習アプリ (Notion版)")
-        self.master.geometry("900x900")
+        self.master.geometry("900x1000")
 
         self.api_key = None
         self.database_id = None
