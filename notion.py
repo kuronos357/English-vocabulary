@@ -65,57 +65,118 @@ class WordQuizApp:
         self.update_all_stats_displays()
 
     def load_config(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_dir = os.path.join(script_dir, '参照データ')
+        config_path = os.path.join(config_dir, 'config.json')
+
         try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(script_dir, '参照データ', 'config.json')
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            self.api_key = config.get("NOTION_API_KEY")
-            self.database_id = config.get("DATABASE_ID")
-            self.question_mode = config.get("QUESTION_MODE", "未")
-            if not self.api_key or not self.database_id:
-                messagebox.showerror("設定エラー", "config.jsonにNOTION_API_KEYとDATABASE_IDを設定してください。")
-                return False
-            return True
+        except FileNotFoundError:
+            os.makedirs(config_dir, exist_ok=True)
+            default_config = {
+                "NOTION_API_KEY": "",
+                "DATABASE_ID": "",
+                "QUESTION_MODE": "未"
+            }
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=4, ensure_ascii=False)
+            messagebox.showinfo(
+                "設定ファイル生成",
+                f"{config_path}\n\n"
+                f"このファイルにAPIキーとデータベースIDを記入してから、アプリを再起動してください。"
+            )
+            return False
+        except json.JSONDecodeError as e:
+            messagebox.showerror("設定エラー", f"config.jsonの形式が正しくありません。\n{e}")
+            return False
         except Exception as e:
             messagebox.showerror("エラー", f"設定ファイルの読み込み中にエラーが発生しました: {e}")
             return False
 
-    def load_data_from_notion(self):
-        url = f"https://api.notion.com/v1/databases/{self.database_id}/query"
-        sort_payload = {"sorts": [{"timestamp": "last_edited_time", "direction": "ascending"}]}
-        try:
-            response = requests.post(url, headers=self.headers, json=sort_payload)
-            response.raise_for_status()
-            response_data = response.json()
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("APIエラー", f"Notionからのデータ取得に失敗しました.\n{e}")
-            return
+        self.api_key = config.get("NOTION_API_KEY")
+        self.database_id = config.get("DATABASE_ID")
+        self.question_mode = config.get("QUESTION_MODE", "未")
 
+        if not self.api_key or not self.database_id:
+            messagebox.showerror(
+                "設定エラー",
+                f"config.jsonにNOTION_API_KEYとDATABASE_IDが設定されていません。\n"
+                f"以下を編集してください:{config_path}"
+            )
+            return False
+        return True
+
+    def load_data_from_notion(self):
+        print("--- データ読み込み開始 ---")
+        url = f"https://api.notion.com/v1/databases/{self.database_id}/query"
+        payload = {"sorts": [{"timestamp": "last_edited_time", "direction": "ascending"}]}
+        all_results = []
+        page_count = 1
+
+        # --- Fetching Stage ---
+        while True:
+            print(f"\r1. Notionからデータを取得中... (ページ {page_count})", end='')
+            try:
+                response = requests.post(url, headers=self.headers, json=payload)
+                response.raise_for_status()
+                response_data = response.json()
+            except requests.exceptions.RequestException as e:
+                print("\nエラー: Notionからのデータ取得に失敗しました。")
+                messagebox.showerror("APIエラー", f"Notionからのデータ取得に失敗しました.\n{e}")
+                self.df = pd.DataFrame([])
+                return
+
+            all_results.extend(response_data.get('results', []))
+
+            if response_data.get('has_more'):
+                page_count += 1
+                payload['start_cursor'] = response_data.get('next_cursor')
+            else:
+                break
+        
+        total_words = len(all_results)
+        print(f"\r1. Notionからデータを取得完了。 ({total_words}件)      ")
+
+        # --- Parsing Stage ---
         word_list = []
-        for page in response_data.get('results', []):
-            props = page.get('properties', {})
-            word_data = {
-                'page_id': page.get('id'),
-                '英語': get_text_from_property(props.get('英単語')),
-                '日本語': get_text_from_property(props.get('日本語')),
-                'メモ': get_text_from_property(props.get('メモ')),
-                'mistake_count': get_number_from_property(props.get('間違えた回数')),
-                '正誤': get_status_from_property(props.get('正誤')),
-                '品詞': get_text_from_property(props.get('品詞')),
-                'やった日': get_text_from_property(props.get('やった日'))
-            }
+        if total_words > 0:
+            print("2. データを解析中...")
+            for i, page in enumerate(all_results):
+                props = page.get('properties', {})
+                word_data = {
+                    'page_id': page.get('id'),
+                    '英語': get_text_from_property(props.get('英単語')),
+                    '日本語': get_text_from_property(props.get('日本語')),
+                    'メモ': get_text_from_property(props.get('メモ')),
+                    'mistake_count': get_number_from_property(props.get('間違えた回数')),
+                    '正誤': get_status_from_property(props.get('正誤')),
+                    '品詞': get_text_from_property(props.get('品詞')),
+                    'やった日': get_text_from_property(props.get('やった日'))
+                }
+                
+                for j in range(1, 5):
+                    word_data[f'例文英語{j}'] = get_text_from_property(props.get(f'例文英語{j}'))
+                    word_data[f'例文日本語{j}'] = get_text_from_property(props.get(f'例文日本語{j}'))
+                word_list.append(word_data)
+
+                # Progress bar
+                percent = (i + 1) * 100 / total_words
+                bar_length = 40
+                filled_len = int(bar_length * (i + 1) // total_words)
+                bar = '█' * filled_len + '-' * (bar_length - filled_len)
+                print(f'\r  |{bar}| {percent:.1f}% ({i+1}/{total_words})', end='')
             
-            for i in range(1, 5):
-                word_data[f'例文英語{i}'] = get_text_from_property(props.get(f'例文英語{i}'))
-                word_data[f'例文日本語{i}'] = get_text_from_property(props.get(f'例文日本語{i}'))
-            word_list.append(word_data)
+            print() # Newline after progress bar
+            print("2. データ解析完了。")
+
+        print("--- データ読み込み完了 ---")
         
         self.df = pd.DataFrame(word_list)
         if self.df.empty:
             messagebox.showinfo("情報", "Notionデータベースに単語が見つかりませんでした。")
         else:
-            # Apply question mode sorting
+            # Apply question mode sorting or filtering
             if self.question_mode == "未":
                 # Prioritize '未' or empty '正誤'
                 unanswered_df = self.df[self.df['正誤'].isin(['', '未'])]
@@ -126,7 +187,13 @@ class WordQuizApp:
                 incorrect_df = self.df[self.df['正誤'] == '誤']
                 other_df = self.df[self.df['正誤'] != '誤']
                 self.df = pd.concat([incorrect_df, other_df]).reset_index(drop=True)
-            
+            elif self.question_mode == "正_only":
+                self.df = self.df[self.df['正誤'] == '正'].reset_index(drop=True)
+            elif self.question_mode == "誤_only":
+                self.df = self.df[self.df['正誤'] == '誤'].reset_index(drop=True)
+            elif self.question_mode == "未_only":
+                self.df = self.df[self.df['正誤'].isin(['', '未'])].reset_index(drop=True)
+
             self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
             self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
 
