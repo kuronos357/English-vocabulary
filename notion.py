@@ -1,18 +1,3 @@
-# ==============================================================================
-# 英単語学習アプリケーション (Notion連携版)
-#
-# Notionデータベースと連携し、英単語のクイズ、進捗管理を行うための
-# Tkinter製GUIアプリケーションです。
-#
-# 主な機能:
-# - Notionデータベースから単語を読み込み
-# - 単語の和訳・英訳クイズ機能
-# - 正解・不正解を記録し、間違えた回数をカウント
-# - 学習セッションごとの統計、総合的な統計の表示
-# - メモ機能
-# - 設定ファイル(config.json)によるAPIキー、データベースIDの管理
-# ==============================================================================
-
 import tkinter as tk
 from tkinter import messagebox
 import pandas as pd
@@ -20,9 +5,6 @@ import json
 import os
 import requests
 from datetime import datetime, timezone, timedelta
-
-# --- ヘルパー関数 ---
-# Notion APIからのレスポンスデータを扱いやすくするための補助的な関数群
 
 def get_text_from_property(prop):
     """
@@ -201,7 +183,7 @@ class WordQuizApp:
         # --- 1. データ取得ステージ (ページネーション対応) ---
         while True:
             # ターミナルに進捗を表示（同じ行を更新）
-            print(f"\r1. Notionからデータを取得中... (ページ {page_count})", end='')
+            print(f"\rNotionからデータを取得中... (ページ {page_count})", end='')
             try:
                 response = requests.post(url, headers=self.headers, json=payload)
                 response.raise_for_status() # HTTPエラーがあれば例外を発生
@@ -226,12 +208,12 @@ class WordQuizApp:
         
         total_words = len(all_results)
         # 取得完了メッセージ（行頭の\rで進捗表示を上書きし、末尾のスペースで前の表示を消去）
-        print(f"\r1. Notionからデータを取得完了。 ({total_words}件)      ")
+        print(f"\rNotionからデータを取得完了。 ({total_words}件)      ")
 
         # --- 2. データ解析ステージ ---
         word_list = []
         if total_words > 0:
-            print("2. データを解析中...")
+            print("データを解析中...")
             # 取得した全ページデータをループ処理
             for i, page in enumerate(all_results):
                 props = page.get('properties', {})
@@ -261,9 +243,9 @@ class WordQuizApp:
                 print(f'\r  |{bar}| {percent:.1f}% ({i+1}/{total_words})', end='')
             
             print() # プログレスバーの後に改行
-            print("2. データ解析完了。")
+            print("データ解析完了。")
 
-        print("---"" データ読み込み完了 ---")
+        print("--- データ読み込み完了 ---")
         
         # 解析した単語リストをPandas DataFrameに変換
         self.df = pd.DataFrame(word_list)
@@ -657,11 +639,6 @@ class WordQuizApp:
 
 # --- アプリケーションの実行 ---
 if __name__ == "__main__":
-    """
-    このスクリプトが直接実行された場合のメインエントリポイント。
-    Tkinterのルートウィンドウを作成し、アプリケーションクラスをインスタンス化して、
-    イベントループを開始する。
-    """
     root = tk.Tk()
     app = WordQuizApp(root)
     root.mainloop()
