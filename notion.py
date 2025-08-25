@@ -3,19 +3,13 @@ from tkinter import ttk, messagebox
 import pandas as pd
 import json
 import os
+import re
 import requests
 from datetime import datetime, timezone, timedelta
 
 def get_text_from_property(prop):
     """
     Notionのページプロパティオブジェクトからテキストコンテンツを抽出する。
-    様々なプロパティタイプ（リッチテキスト、タイトル、日付、セレクトなど）に対応。
-    
-    Args:
-        prop (dict): Notion APIのプロパティオブジェクト
-    
-    Returns:
-        str: 抽出されたテキスト。該当データがない場合は空文字。
     """
     if not prop:
         return ""
@@ -33,72 +27,52 @@ def get_text_from_property(prop):
     return ""
 
 def get_number_from_property(prop):
-    """
-    Notionのページプロパティオブジェクトから数値（Number）を抽出する。
-    
-    Args:
-        prop (dict): Notion APIのプロパティオブジェクト
-    
-    Returns:
-        int or float: 抽出された数値。該当データがない場合は0。
-    """
     return prop.get('number', 0) if prop else 0
 
 def get_status_from_property(prop):
-    """
-    Notionのページプロパティオブジェクトからステータス（Status）の名前を抽出する。
-    
-    Args:
-        prop (dict): Notion APIのプロパティオブジェクト
-    
-    Returns:
-        str: 抽出されたステータス名。該当データがない場合は空文字。
-    """
     return prop.get('status', {}).get('name', '') if prop else ''
 
-# --- メインアプリケーション ---
-
 class WordQuizApp:
-    """
-    英単語クイズアプリケーションのメインクラス。
-    """
     def __init__(self, master):
         self.master = master
         self.master.title("英単語学習アプリ (Notion版)")
         self.master.geometry("900x1200")
 
-        # --- 設定用変数 ---
         self.api_key_var = tk.StringVar()
         self.db_id_var = tk.StringVar()
         self.mode_unanswered_var = tk.BooleanVar()
         self.mode_incorrect_var = tk.BooleanVar()
         self.mode_correct_var = tk.BooleanVar()
 
-        # --- 設定とAPI準備 ---
         self.question_mode = []
         self.headers = {}
         self.load_config()
         self.update_headers()
 
-        # --- データ管理 ---
-        self.master_df = pd.DataFrame() # Notionから取得した全データを保持
-        self.df = pd.DataFrame()        # フィルタリング後のクイズ用データ
+        self.master_df = pd.DataFrame()
+        self.df = pd.DataFrame()
 
-        # --- 統計データ ---
         self.todays_total_answered = 0
         self.todays_correct_count = 0
 
-        # --- UI構築と初回データ読み込み ---
         self.create_widgets()
         if self.api_key_var.get() and self.db_id_var.get():
-            self.load_data_from_notion() # master_dfを埋める
-            self.refilter_and_display_words() # master_dfからdfを作成して表示
+            self.load_data_from_notion()
+            self.refilter_and_display_words()
         else:
             messagebox.showwarning("設定不足", "APIキーまたはデータベースIDが設定されていません。\n「設定」タブで設定を完了してください。")
 
-        # --- 状態管理 ---
         self.current_index = 0
         self.is_answer_visible = False
+
+    def extract_id_from_url(self, url_or_id):
+        """NotionのURLからデータベースID(32文字の16進数)を抽出する。"""
+        if not isinstance(url_or_id, str):
+            return ""
+        match = re.search(r'([a-f0-9]{32})', url_or_id)
+        if match:
+            return match.group(1)
+        return url_or_id
 
     def update_headers(self):
         self.headers = {
@@ -124,6 +98,10 @@ class WordQuizApp:
         self.mode_correct_var.set("正" in self.question_mode)
 
     def save_settings_and_refilter(self):
+        raw_db_id = self.db_id_var.get()
+        cleaned_db_id = self.extract_id_from_url(raw_db_id)
+        self.db_id_var.set(cleaned_db_id)
+
         if not self.api_key_var.get() or not self.db_id_var.get():
             messagebox.showerror("エラー", "APIキーとデータベースIDは必須です。")
             return
@@ -149,22 +127,17 @@ class WordQuizApp:
         print("成功", "設定を保存しました。出題内容を更新します。")
         self.question_mode = new_modes
         
-        # APIキーが変更された可能性があるためヘッダーを更新
         self.update_headers()
 
-        # master_dfが空（初回起動時など）ならNotionから読み込み、そうでなければメモリから再フィルター
         if self.master_df.empty:
-             self.load_data_from_notion() # master_dfを埋める
+             self.load_data_from_notion()
         
         self.refilter_and_display_words()
 
     def refilter_and_display_words(self):
-        """メモリ上のマスターデータから単語をフィルタリングし、UIを更新する"""
         if self.master_df.empty:
-            print("マスターデータが空のため、フィルタリングをスキップします。")
             self.df = pd.DataFrame([])
         else:
-            # --- フィルタリングステージ ---
             source_df = self.master_df.copy()
             selected_statuses = []
             if "未" in self.question_mode:
@@ -182,7 +155,6 @@ class WordQuizApp:
         if self.df.empty:
             messagebox.showinfo("情報", "選択されたモードに該当する単語がありませんでした。")
 
-        # --- UIリセット ---
         self._load_todays_stats_from_notion()
         self.current_index = 0
         self.update_all_stats_displays()
@@ -251,7 +223,7 @@ class WordQuizApp:
         settings_frame.pack(fill=tk.BOTH, expand=True)
         tk.Label(settings_frame, text="Notion APIキー:", font=("Arial", 12, "bold")).pack(anchor='w', pady=(10,2))
         tk.Entry(settings_frame, textvariable=self.api_key_var, font=("Arial", 12), width=60, show="*").pack(fill=tk.X, padx=5, pady=(0,10))
-        tk.Label(settings_frame, text="データベースID:", font=("Arial", 12, "bold")).pack(anchor='w', pady=(10,2))
+        tk.Label(settings_frame, text="データベースID (URL可):", font=("Arial", 12, "bold")).pack(anchor='w', pady=(10,2))
         tk.Entry(settings_frame, textvariable=self.db_id_var, font=("Arial", 12), width=60).pack(fill=tk.X, padx=5, pady=(0,10))
         tk.Label(settings_frame, text="正誤プロパティの出題モード:", font=("Arial", 12, "bold")).pack(anchor='w', pady=(20,2))
         modes_frame = tk.Frame(settings_frame)
@@ -261,11 +233,9 @@ class WordQuizApp:
         tk.Checkbutton(modes_frame, text="正解した問題", variable=self.mode_correct_var, font=("Arial", 11)).pack(anchor='w')
         save_button = tk.Button(settings_frame, text="設定を保存", command=self.save_settings_and_refilter, font=("Arial", 14, "bold"), bg="lightblue")
         save_button.pack(fill=tk.X, padx=5, pady=20)
+        tk.Label(settings_frame, text="※APIキー/DB IDを変更した際はアプリの再起動すること。", font=("Arial", 9)).pack(anchor='w', pady=(10,2))
 
     def load_data_from_notion(self):
-        """
-        Notionデータベースから全ての単語データを取得し、マスターDataFrameに格納する。
-        """
         print("---"" 全データ読み込み開始 ---")
         url = f"https://api.notion.com/v1/databases/{self.db_id_var.get()}/query"
         payload = {"sorts": [{"timestamp": "last_edited_time", "direction": "ascending"}]}
@@ -327,7 +297,7 @@ class WordQuizApp:
         if self.update_notion_page(page_id, properties_to_update):
             self.df.loc[self.current_index, 'メモ'] = memo_text
             self.master_df.loc[self.master_df['page_id'] == page_id, 'メモ'] = memo_text
-            print("成功", "メモを保存しました。")
+            messagebox.showinfo("成功", "メモを保存しました。")
 
     def create_label(self, parent, text, font_size=14):
         label = tk.Label(parent, text=text, font=("Arial", font_size, "bold"))
@@ -372,10 +342,11 @@ class WordQuizApp:
         correct = self.todays_correct_count
         incorrect = total - correct
         correct_rate = (correct / total * 100) if total > 0 else 0
+        incorrect_rate = (incorrect / total * 100) if total > 0 else 0
         stats_text = (
             f"解答数: {total}\n"
             f"正解: {correct} ({correct_rate:.1f}%)\n"
-            f"誤答: {incorrect} ({100 - correct_rate:.1f}%)"
+            f"誤答: {incorrect} ({incorrect_rate:.1f}%)"
         )
         self.today_stats_content.config(text=stats_text)
 
@@ -504,7 +475,6 @@ class WordQuizApp:
             messagebox.showerror("更新エラー", f"Notionページの更新に失敗しました.\n{e}")
             return False
 
-# --- アプリケーションの実行 ---
 if __name__ == "__main__":
     root = tk.Tk()
     app = WordQuizApp(root)
