@@ -74,12 +74,14 @@ class WordQuizApp:
         # --- 設定用変数 ---
         self.api_key_var = tk.StringVar()
         self.db_id_var = tk.StringVar()
-        self.mode_var = tk.StringVar()
+        self.mode_unanswered_var = tk.BooleanVar()
+        self.mode_incorrect_var = tk.BooleanVar()
+        self.mode_correct_var = tk.BooleanVar()
 
         # --- 設定とAPI準備 ---
         self.api_key = None
         self.database_id = None
-        self.question_mode = "未"
+        self.question_mode = []
         self.headers = {}
         
         # config.jsonを読み込み、StringVarと変数を設定
@@ -98,7 +100,7 @@ class WordQuizApp:
             self.load_data_from_notion()
             self._load_todays_stats_from_notion()
         else:
-            messagebox.showwarning("設定不足", "APIキーまたはデータベースIDが設定されていません。「設定」タブで設定を完了してください。")
+            messagebox.showwarning("設定不足", "APIキーまたはデータベースIDが設定されていません。\n「設定」タブで設定を完了してください。")
 
         # --- 状態管理 ---
         self.current_index = 0
@@ -135,12 +137,14 @@ class WordQuizApp:
         # 変数に読み込み（存在しない場合はデフォルト値）
         self.api_key = config.get("NOTION_API_KEY", "")
         self.database_id = config.get("DATABASE_ID", "")
-        self.question_mode = config.get("QUESTION_MODE", "未")
+        self.question_mode = config.get("QUESTION_MODE", ["未"])
 
         # Tkinterの変数に値を設定
         self.api_key_var.set(self.api_key)
         self.db_id_var.set(self.database_id)
-        self.mode_var.set(self.question_mode)
+        self.mode_unanswered_var.set("未" in self.question_mode)
+        self.mode_incorrect_var.set("誤" in self.question_mode)
+        self.mode_correct_var.set("正" in self.question_mode)
 
     def save_config_and_reload(self):
         """GUIから設定を保存し、データを再読み込みする"""
@@ -148,19 +152,28 @@ class WordQuizApp:
             messagebox.showerror("エラー", "APIキーとデータベースIDは必須です。")
             return
 
+        new_modes = []
+        if self.mode_unanswered_var.get(): new_modes.append("未")
+        if self.mode_incorrect_var.get(): new_modes.append("誤")
+        if self.mode_correct_var.get(): new_modes.append("正")
+
+        if not new_modes:
+            messagebox.showerror("エラー", "少なくとも1つの出題モードを選択してください。")
+            return
+
         os.makedirs(self.config_dir, exist_ok=True)
         config = {
             "NOTION_API_KEY": self.api_key_var.get(),
             "DATABASE_ID": self.db_id_var.get(),
-            "QUESTION_MODE": self.mode_var.get()
+            "QUESTION_MODE": new_modes
         }
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
 
-        messagebox.showinfo("成功", "設定を保存しました。データを再読み込みします。")
+        messagebox.showinfo("成功", "設定を保存しました。\nデータを再読み込みします。")
 
         # 新しい設定を適用
-        self.question_mode = self.mode_var.get()
+        self.question_mode = new_modes
         self.update_headers()
 
         # データ再読み込みとUIリセット
@@ -269,10 +282,14 @@ class WordQuizApp:
         db_id_entry.pack(fill=tk.X, padx=5, pady=(0,10))
 
         # --- Question Mode ---
-        tk.Label(settings_frame, text="問題の出題モード:", font=("Arial", 12, "bold")).pack(anchor='w', pady=(20,2))
-        modes = ["未", "誤", "正_only", "誤_only", "未_only"]
-        mode_menu = ttk.Combobox(settings_frame, textvariable=self.mode_var, values=modes, state="readonly", font=("Arial", 12))
-        mode_menu.pack(fill=tk.X, padx=5, pady=(0,20))
+        tk.Label(settings_frame, text="問題の出題モード (複数選択可):", font=("Arial", 12, "bold")).pack(anchor='w', pady=(20,2))
+        
+        modes_frame = tk.Frame(settings_frame)
+        modes_frame.pack(fill=tk.X, padx=5)
+
+        tk.Checkbutton(modes_frame, text="未学習", variable=self.mode_unanswered_var, font=("Arial", 11)).pack(anchor='w')
+        tk.Checkbutton(modes_frame, text="間違えた問題", variable=self.mode_incorrect_var, font=("Arial", 11)).pack(anchor='w')
+        tk.Checkbutton(modes_frame, text="正解した問題", variable=self.mode_correct_var, font=("Arial", 11)).pack(anchor='w')
         
         # --- Save Button ---
         save_button = tk.Button(settings_frame, text="設定を保存して再読み込み", command=self.save_config_and_reload, font=("Arial", 14, "bold"), bg="lightblue")
@@ -288,6 +305,7 @@ class WordQuizApp:
             return
 
         url = f"https://api.notion.com/v1/databases/{self.database_id}/query"
+        # last_edited_timeでソートすることで、最近学習したものが後になるようにする
         payload = {"sorts": [{"timestamp": "last_edited_time", "direction": "ascending"}]}
         all_results = []
         page_count = 1
@@ -350,25 +368,27 @@ class WordQuizApp:
         self.df = pd.DataFrame(word_list)
         
         if self.df.empty:
-            if total_words > 0: # データはあるのに解析結果が空の場合
+            if total_words > 0:
                  messagebox.showwarning("解析エラー", "データの解析に失敗しました。プロパティ名が正しいか確認してください。")
             else:
                  messagebox.showinfo("情報", "Notionデータベースに単語が見つかりませんでした。")
         else:
-            if self.question_mode == "未":
-                unanswered_df = self.df[self.df['正誤'].isin(['', '未'])]
-                answered_df = self.df[~self.df['正誤'].isin(['', '未'])]
-                self.df = pd.concat([unanswered_df, answered_df]).reset_index(drop=True)
-            elif self.question_mode == "誤":
-                incorrect_df = self.df[self.df['正誤'] == '誤']
-                other_df = self.df[self.df['正誤'] != '誤']
-                self.df = pd.concat([incorrect_df, other_df]).reset_index(drop=True)
-            elif self.question_mode == "正_only":
-                self.df = self.df[self.df['正誤'] == '正'].reset_index(drop=True)
-            elif self.question_mode == "誤_only":
-                self.df = self.df[self.df['正誤'] == '誤'].reset_index(drop=True)
-            elif self.question_mode == "未_only":
-                self.df = self.df[self.df['正誤'].isin(['', '未'])].reset_index(drop=True)
+            # --- 3. 出題順の整理ステージ ---
+            selected_statuses = []
+            if "未" in self.question_mode:
+                selected_statuses.extend(['', '未'])
+            if "誤" in self.question_mode:
+                selected_statuses.append('誤')
+            if "正" in self.question_mode:
+                selected_statuses.append('正')
+
+            if selected_statuses:
+                self.df = self.df[self.df['正誤'].isin(selected_statuses)].reset_index(drop=True)
+            else:
+                self.df = pd.DataFrame([]) # 何も選択されていない場合は空にする
+
+            if self.df.empty:
+                messagebox.showinfo("情報", "選択されたモードに該当する単語がありませんでした。")
 
             self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
             self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
