@@ -51,6 +51,7 @@ class WordQuizApp:
         self.question_mode = []
         self.headers = {}
         self.timer_id = None
+        self.indicator_timer_id = None
         self.load_config()
         self.update_headers()
 
@@ -192,9 +193,12 @@ class WordQuizApp:
         top_frame.pack(fill=tk.BOTH, expand=True)
         self.word_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
         self.word_frame.pack(fill=tk.X, pady=5)
-        self.original_frame_color = self.word_frame.cget("background")
         self.create_label(self.word_frame, "単語", font_size=16)
         self.word_content = self.create_content(self.word_frame, "", font_size=24)
+        self.original_content_fg_color = self.word_content.cget("foreground")
+        self.timer_progress_bar = ttk.Progressbar(self.word_frame, orient='horizontal', mode='determinate')
+        self.timer_progress_bar.pack(fill=tk.X, padx=10, pady=5, side=tk.BOTTOM)
+
         self.sentence_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
         self.sentence_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         self.create_label(self.sentence_frame, "例文", font_size=16)
@@ -459,22 +463,35 @@ class WordQuizApp:
 
     def start_timer(self):
         self.cancel_timer()
-        self.word_frame.config(bg=self.original_frame_color)
-        self.word_content.config(bg=self.original_frame_color)
+        self.word_content.config(fg=self.original_content_fg_color)
+        self.timer_progress_bar.config(value=0)
 
         timer_seconds = self.timer_seconds_var.get()
         if timer_seconds > 0:
+            self.timer_progress_bar["maximum"] = timer_seconds * 10
+            self.timer_progress_bar["value"] = timer_seconds * 10
+            self.time_left = timer_seconds * 10
             self.timer_id = self.master.after(timer_seconds * 1000, self.on_timer_end)
+            self.indicator_timer_id = self.master.after(100, self.update_timer_indicator)
+
+    def update_timer_indicator(self):
+        if self.time_left > 0:
+            self.time_left -= 1
+            self.timer_progress_bar["value"] = self.time_left
+            self.indicator_timer_id = self.master.after(100, self.update_timer_indicator)
 
     def on_timer_end(self):
-        self.word_frame.config(bg='red')
-        self.word_content.config(bg='red')
+        self.word_content.config(fg='red')
         self.timer_id = None
+        self.timer_progress_bar["value"] = 0
 
     def cancel_timer(self):
         if self.timer_id:
             self.master.after_cancel(self.timer_id)
             self.timer_id = None
+        if self.indicator_timer_id:
+            self.master.after_cancel(self.indicator_timer_id)
+            self.indicator_timer_id = None
 
     def show_word(self):
         if self.df.empty or not (0 <= self.current_index < len(self.df)):
