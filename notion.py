@@ -6,6 +6,8 @@ import os
 import re
 import requests
 from datetime import datetime, timezone, timedelta
+import threading
+import queue
 
 def get_text_from_property(prop):
     """
@@ -43,9 +45,12 @@ class WordQuizApp:
         self.mode_unanswered_var = tk.BooleanVar()
         self.mode_incorrect_var = tk.BooleanVar()
         self.mode_correct_var = tk.BooleanVar()
+        self.mode_correct_with_mistakes_var = tk.BooleanVar()
+        self.timer_seconds_var = tk.IntVar()
 
         self.question_mode = []
         self.headers = {}
+        self.timer_id = None
         self.load_config()
         self.update_headers()
 
@@ -54,11 +59,12 @@ class WordQuizApp:
 
         self.todays_total_answered = 0
         self.todays_correct_count = 0
+        
+        self.loading_window = None
 
         self.create_widgets()
         if self.api_key_var.get() and self.db_id_var.get():
-            self.load_data_from_notion()
-            self.refilter_and_display_words()
+            self.start_loading_thread()
         else:
             messagebox.showwarning("設定不足", "APIキーまたはデータベースIDが設定されていません。\n「設定」タブで設定を完了してください。")
 
@@ -93,9 +99,11 @@ class WordQuizApp:
         self.api_key_var.set(config.get("NOTION_API_KEY", ""))
         self.db_id_var.set(config.get("DATABASE_ID", ""))
         self.question_mode = config.get("QUESTION_MODE", ["未"])
+        self.timer_seconds_var.set(config.get("TIMER_SECONDS", 30))
         self.mode_unanswered_var.set("未" in self.question_mode)
         self.mode_incorrect_var.set("誤" in self.question_mode)
         self.mode_correct_var.set("正" in self.question_mode)
+        self.mode_correct_with_mistakes_var.set("正(誤)" in self.question_mode)
 
     def save_settings_and_refilter(self):
         raw_db_id = self.db_id_var.get()
@@ -110,6 +118,7 @@ class WordQuizApp:
         if self.mode_unanswered_var.get(): new_modes.append("未")
         if self.mode_incorrect_var.get(): new_modes.append("誤")
         if self.mode_correct_var.get(): new_modes.append("正")
+        if self.mode_correct_with_mistakes_var.get(): new_modes.append("正(誤)")
 
         if not new_modes:
             print("エラー", "少なくとも1つの出題モードを選択してください。")
@@ -119,7 +128,8 @@ class WordQuizApp:
         config = {
             "NOTION_API_KEY": self.api_key_var.get(),
             "DATABASE_ID": self.db_id_var.get(),
-            "QUESTION_MODE": new_modes
+            "QUESTION_MODE": new_modes,
+            "TIMER_SECONDS": self.timer_seconds_var.get()
         }
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
@@ -130,25 +140,30 @@ class WordQuizApp:
         self.update_headers()
 
         if self.master_df.empty:
-             self.load_data_from_notion()
-        
-        self.refilter_and_display_words()
+            self.start_loading_thread()
+        else:
+            self.refilter_and_display_words()
 
     def refilter_and_display_words(self):
         if self.master_df.empty:
             self.df = pd.DataFrame([])
         else:
             source_df = self.master_df.copy()
-            selected_statuses = []
-            if "未" in self.question_mode:
-                selected_statuses.extend(['', '未'])
-            if "誤" in self.question_mode:
-                selected_statuses.append('誤')
-            if "正" in self.question_mode:
-                selected_statuses.append('正')
+            
+            final_condition = pd.Series([False] * len(source_df), index=source_df.index)
 
-            if selected_statuses:
-                self.df = source_df[source_df['正誤'].isin(selected_statuses)].reset_index(drop=True)
+            if "未" in self.question_mode:
+                final_condition |= source_df['正誤'].isin(['', '未'])
+            if "誤" in self.question_mode:
+                final_condition |= (source_df['正誤'] == '誤')
+            if "正" in self.question_mode:
+                final_condition |= (source_df['正誤'] == '正')
+            if "正(誤)" in self.question_mode:
+                source_df['mistake_count'] = pd.to_numeric(source_df['mistake_count'], errors='coerce').fillna(0)
+                final_condition |= ((source_df['正誤'] == '正') & (source_df['mistake_count'] > 0))
+
+            if final_condition.any():
+                self.df = source_df[final_condition].reset_index(drop=True)
             else:
                 self.df = pd.DataFrame([])
 
@@ -177,6 +192,7 @@ class WordQuizApp:
         top_frame.pack(fill=tk.BOTH, expand=True)
         self.word_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
         self.word_frame.pack(fill=tk.X, pady=5)
+        self.original_frame_color = self.word_frame.cget("background")
         self.create_label(self.word_frame, "単語", font_size=16)
         self.word_content = self.create_content(self.word_frame, "", font_size=24)
         self.sentence_frame = tk.Frame(top_frame, relief=tk.RIDGE, borderwidth=2)
@@ -225,17 +241,74 @@ class WordQuizApp:
         tk.Entry(settings_frame, textvariable=self.api_key_var, font=("Arial", 12), width=60, show="*").pack(fill=tk.X, padx=5, pady=(0,10))
         tk.Label(settings_frame, text="データベースID (URL可):", font=("Arial", 12, "bold")).pack(anchor='w', pady=(10,2))
         tk.Entry(settings_frame, textvariable=self.db_id_var, font=("Arial", 12), width=60).pack(fill=tk.X, padx=5, pady=(0,10))
+        
+        tk.Label(settings_frame, text="タイマー時間 (秒):", font=("Arial", 12, "bold")).pack(anchor='w', pady=(10,2))
+        tk.Entry(settings_frame, textvariable=self.timer_seconds_var, font=("Arial", 12), width=10).pack(anchor='w', padx=5, pady=(0,10))
+
         tk.Label(settings_frame, text="正誤プロパティの出題モード:", font=("Arial", 12, "bold")).pack(anchor='w', pady=(20,2))
         modes_frame = tk.Frame(settings_frame)
         modes_frame.pack(fill=tk.X, padx=5)
         tk.Checkbutton(modes_frame, text="未学習", variable=self.mode_unanswered_var, font=("Arial", 11)).pack(anchor='w')
         tk.Checkbutton(modes_frame, text="間違えた問題", variable=self.mode_incorrect_var, font=("Arial", 11)).pack(anchor='w')
         tk.Checkbutton(modes_frame, text="正解した問題", variable=self.mode_correct_var, font=("Arial", 11)).pack(anchor='w')
+        tk.Checkbutton(modes_frame, text="正解しているが、過去に間違えたことがある問題", variable=self.mode_correct_with_mistakes_var, font=("Arial", 11)).pack(anchor='w')
         save_button = tk.Button(settings_frame, text="設定を保存", command=self.save_settings_and_refilter, font=("Arial", 14, "bold"), bg="lightblue")
         save_button.pack(fill=tk.X, padx=5, pady=20)
         tk.Label(settings_frame, text="※APIキー/DB IDを変更した際はアプリの再起動すること。", font=("Arial", 9)).pack(anchor='w', pady=(10,2))
 
-    def load_data_from_notion(self):
+    def show_loading_indicator(self):
+        if self.loading_window is not None and self.loading_window.winfo_exists():
+            return
+        self.loading_window = tk.Toplevel(self.master)
+        self.loading_window.transient(self.master)
+        self.loading_window.grab_set()
+        self.loading_window.title("読み込み中")
+        self.loading_window.geometry("300x100")
+        
+        master_x = self.master.winfo_x()
+        master_y = self.master.winfo_y()
+        master_w = self.master.winfo_width()
+        master_h = self.master.winfo_height()
+        self.loading_window.geometry(f"+{master_x + master_w//2 - 150}+{master_y + master_h//2 - 50}")
+
+        label = ttk.Label(self.loading_window, text="Notionからデータを読み込み中...", font=("Arial", 12))
+        label.pack(pady=10)
+        progress = ttk.Progressbar(self.loading_window, mode='indeterminate')
+        progress.pack(pady=10, padx=20, fill=tk.X)
+        progress.start(10)
+        self.loading_window.protocol("WM_DELETE_WINDOW", lambda: None)
+
+    def hide_loading_indicator(self):
+        if self.loading_window:
+            self.loading_window.destroy()
+            self.loading_window = None
+
+    def start_loading_thread(self):
+        self.show_loading_indicator()
+        self.data_queue = queue.Queue()
+        threading.Thread(target=self.load_data_from_notion, args=(self.data_queue,), daemon=True).start()
+        self.master.after(100, self.check_loading_queue)
+
+    def check_loading_queue(self):
+        try:
+            result_tuple = self.data_queue.get_nowait()
+            self.hide_loading_indicator()
+            
+            df, error = result_tuple
+            if error:
+                messagebox.showerror("APIエラー", f"Notionからのデータ取得に失敗しました.\n{error}")
+                self.master_df = pd.DataFrame([])
+            else:
+                self.master_df = df
+                self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
+                self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
+            
+            self.refilter_and_display_words()
+
+        except queue.Empty:
+            self.master.after(100, self.check_loading_queue)
+
+    def load_data_from_notion(self, q):
         print("---"" 全データ読み込み開始 ---")
         url = f"https://api.notion.com/v1/databases/{self.db_id_var.get()}/query"
         payload = {"sorts": [{"timestamp": "last_edited_time", "direction": "ascending"}]}
@@ -249,8 +322,7 @@ class WordQuizApp:
                 response_data = response.json()
             except requests.exceptions.RequestException as e:
                 print(f"\nエラー: Notionからのデータ取得に失敗しました。\n{e}")
-                messagebox.showerror("APIエラー", f"Notionからのデータ取得に失敗しました.\n{e}")
-                self.master_df = pd.DataFrame([])
+                q.put((None, e))
                 return
             all_results.extend(response_data.get('results', []))
             if response_data.get('has_more'):
@@ -282,9 +354,8 @@ class WordQuizApp:
                     '例文英語4': get_text_from_property(props.get('例文英語4')),
                     '例文日本語4': get_text_from_property(props.get('例文日本語4')),
                 })
-        self.master_df = pd.DataFrame(word_list)
-        self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
-        self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
+        master_df = pd.DataFrame(word_list)
+        q.put((master_df, None))
         print("--- 全データ読み込み完了 ---")
 
     def save_memo(self):
@@ -386,6 +457,25 @@ class WordQuizApp:
         self.todays_total_answered = len(todays_entries)
         self.todays_correct_count = len(todays_entries[todays_entries['正誤'] == '正'])
 
+    def start_timer(self):
+        self.cancel_timer()
+        self.word_frame.config(bg=self.original_frame_color)
+        self.word_content.config(bg=self.original_frame_color)
+
+        timer_seconds = self.timer_seconds_var.get()
+        if timer_seconds > 0:
+            self.timer_id = self.master.after(timer_seconds * 1000, self.on_timer_end)
+
+    def on_timer_end(self):
+        self.word_frame.config(bg='red')
+        self.word_content.config(bg='red')
+        self.timer_id = None
+
+    def cancel_timer(self):
+        if self.timer_id:
+            self.master.after_cancel(self.timer_id)
+            self.timer_id = None
+
     def show_word(self):
         if self.df.empty or not (0 <= self.current_index < len(self.df)):
             self.word_content.config(text="単語がありません。設定を確認してください。")
@@ -393,6 +483,8 @@ class WordQuizApp:
                 label.config(text="")
             self.memo_content.delete("1.0", tk.END)
             return
+        
+        self.start_timer()
         word_data = self.df.iloc[self.current_index]
         self.is_answer_visible = False
         self.word_content.config(text=word_data.get('英語', ''))
@@ -423,6 +515,8 @@ class WordQuizApp:
     def record_and_next(self, correct):
         if self.df.empty or not (0 <= self.current_index < len(self.df)):
             return
+        
+        self.cancel_timer()
         word_data = self.df.iloc[self.current_index]
         page_id = word_data['page_id']
         properties_to_update = {}
