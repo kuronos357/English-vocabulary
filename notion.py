@@ -61,8 +61,6 @@ class WordQuizApp:
         self.todays_total_answered = 0
         self.todays_correct_count = 0
         
-        self.loading_window = None
-
         self.create_widgets()
         if self.api_key_var.get() and self.db_id_var.get():
             self.start_loading_thread()
@@ -260,57 +258,54 @@ class WordQuizApp:
         save_button.pack(fill=tk.X, padx=5, pady=20)
         tk.Label(settings_frame, text="※APIキー/DB IDを変更した際はアプリの再起動すること。", font=("Arial", 9)).pack(anchor='w', pady=(10,2))
 
-    def show_loading_indicator(self):
-        if self.loading_window is not None and self.loading_window.winfo_exists():
-            return
-        self.loading_window = tk.Toplevel(self.master)
-        self.loading_window.transient(self.master)
-        self.loading_window.grab_set()
-        self.loading_window.title("読み込み中")
-        self.loading_window.geometry("300x100")
-        
-        master_x = self.master.winfo_x()
-        master_y = self.master.winfo_y()
-        master_w = self.master.winfo_width()
-        master_h = self.master.winfo_height()
-        self.loading_window.geometry(f"+{master_x + master_w//2 - 150}+{master_y + master_h//2 - 50}")
-
-        label = ttk.Label(self.loading_window, text="Notionからデータを読み込み中...", font=("Arial", 12))
-        label.pack(pady=10)
-        progress = ttk.Progressbar(self.loading_window, mode='indeterminate')
-        progress.pack(pady=10, padx=20, fill=tk.X)
-        progress.start(10)
-        self.loading_window.protocol("WM_DELETE_WINDOW", lambda: None)
-
-    def hide_loading_indicator(self):
-        if self.loading_window:
-            self.loading_window.destroy()
-            self.loading_window = None
+    
 
     def start_loading_thread(self):
-        self.show_loading_indicator()
+        self.word_content.config(text="Notionからデータを読み込み中...")
+        self.timer_progress_bar.config(mode='determinate', maximum=20, value=0)
+        self.toggle_button.config(state=tk.DISABLED)
+        self.correct_button.config(state=tk.DISABLED)
+        self.incorrect_button.config(state=tk.DISABLED)
+        self.save_memo_button.config(state=tk.DISABLED)
+
         self.data_queue = queue.Queue()
         threading.Thread(target=self.load_data_from_notion, args=(self.data_queue,), daemon=True).start()
         self.master.after(100, self.check_loading_queue)
 
     def check_loading_queue(self):
         try:
-            result_tuple = self.data_queue.get_nowait()
-            self.hide_loading_indicator()
-            
-            df, error = result_tuple
-            if error:
-                messagebox.showerror("APIエラー", f"Notionからのデータ取得に失敗しました.\n{error}")
-                self.master_df = pd.DataFrame([])
-            else:
-                self.master_df = df
-                self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
-                self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
-            
-            self.refilter_and_display_words()
+            while not self.data_queue.empty():
+                message_type, *payload = self.data_queue.get_nowait()
+                
+                if message_type == 'progress':
+                    page_count, = payload
+                    self.word_content.config(text=f"データを取得中... (ページ {page_count})")
+                    self.timer_progress_bar.config(value=page_count)
 
+                elif message_type == 'done':
+                    self.timer_progress_bar.config(mode='determinate', value=0)
+
+                    self.toggle_button.config(state=tk.NORMAL)
+                    self.correct_button.config(state=tk.NORMAL)
+                    self.incorrect_button.config(state=tk.NORMAL)
+                    self.save_memo_button.config(state=tk.NORMAL)
+
+                    df, error = payload
+                    if error:
+                        messagebox.showerror("APIエラー", f"Notionからのデータ取得に失敗しました.\n{error}")
+                        self.master_df = pd.DataFrame([])
+                        self.word_content.config(text="読み込みに失敗しました。")
+                    else:
+                        self.master_df = df
+                        self.sentence_english_cols = [f'例文英語{i}' for i in range(1, 5)]
+                        self.sentence_japanese_cols = [f'例文日本語{i}' for i in range(1, 5)]
+                    
+                    self.refilter_and_display_words()
+                    return
         except queue.Empty:
-            self.master.after(100, self.check_loading_queue)
+            pass
+        
+        self.master.after(100, self.check_loading_queue)
 
     def load_data_from_notion(self, q):
         print("---"" 全データ読み込み開始 ---")
@@ -320,13 +315,14 @@ class WordQuizApp:
         page_count = 1
         while True:
             print(f"\rNotionからデータを取得中... (ページ {page_count})", end='')
+            q.put(('progress', page_count))
             try:
                 response = requests.post(url, headers=self.headers, json=payload)
                 response.raise_for_status()
                 response_data = response.json()
             except requests.exceptions.RequestException as e:
-                print(f"\nエラー: Notionからのデータ取得に失敗しました。\n{e}")
-                q.put((None, e))
+                print(f"エラー: Notionからのデータ取得に失敗しました。{e}")
+                q.put(('done', None, e))
                 return
             all_results.extend(response_data.get('results', []))
             if response_data.get('has_more'):
@@ -359,7 +355,7 @@ class WordQuizApp:
                     '例文日本語4': get_text_from_property(props.get('例文日本語4')),
                 })
         master_df = pd.DataFrame(word_list)
-        q.put((master_df, None))
+        q.put(('done', master_df, None))
         print("--- 全データ読み込み完了 ---")
 
     def save_memo(self):
